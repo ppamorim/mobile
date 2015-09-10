@@ -8,12 +8,38 @@
 
 #include <Foundation/Foundation.h>
 
-@class GoInterfacesI;
+@class GoInterfacesI1;
 
-@class GoInterfacesWithParam;
+@class GoInterfacesI2;
+
+@protocol GoInterfacesError
+- (BOOL)Err:(NSError**)error;
+@end
 
 @protocol GoInterfacesI
 - (int32_t)Rand;
+@end
+
+@interface GoInterfacesI1 : NSObject {
+}
+@property(strong, readonly) id ref;
+
+- (id)initWithRef:(id)ref;
+- (void)J;
+@end
+
+
+@interface GoInterfacesI2 : NSObject {
+}
+@property(strong, readonly) id ref;
+
+- (id)initWithRef:(id)ref;
+- (void)G;
+@end
+
+
+@protocol GoInterfacesI3
+- (GoInterfacesI1*)F;
 @end
 
 @protocol GoInterfacesWithParam
@@ -21,6 +47,8 @@
 @end
 
 FOUNDATION_EXPORT int32_t GoInterfacesAdd3(id<GoInterfacesI> r);
+
+FOUNDATION_EXPORT BOOL GoInterfacesCallErr(id<GoInterfacesError> e, NSError** error);
 
 FOUNDATION_EXPORT id<GoInterfacesI> GoInterfacesSeven();
 

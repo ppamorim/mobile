@@ -95,6 +95,7 @@ void testStruct() {
 }
 @property int32_t value;
 
+- (BOOL)Error:(BOOL)e error:(NSError **)error;
 - (int64_t)Times:(int32_t)v;
 @end
 
@@ -106,9 +107,32 @@ static int numI = 0;
 }
 @synthesize value;
 
+- (BOOL)StringError:(NSString *)s
+              ret0_:(NSString **)ret0_
+              error:(NSError **)error {
+  if ([s isEqualTo:@"number"]) {
+    if (ret0_ != NULL) {
+      *ret0_ = @"OK";
+    }
+    return true;
+  }
+  return false;
+}
+
+- (BOOL)Error:(BOOL)triggerError error:(NSError **)error {
+  if (!triggerError) {
+    return YES;
+  }
+  if (error != NULL) {
+    *error = [NSError errorWithDomain:@"SeqTest" code:1 userInfo:NULL];
+  }
+  return NO;
+}
+
 - (int64_t)Times:(int32_t)v {
   return v * value;
 }
+
 - (void)dealloc {
   if (self.value == 0) {
     numI++;
@@ -155,6 +179,41 @@ void testInterface() {
   // Unregistered all Objective-C objects.
 }
 
+void testIssue12307() {
+  Number *num = [[Number alloc] init];
+  num.value = 1024;
+  NSError *error;
+  if (GoTestpkgCallIError(num, YES, &error) == YES) {
+    ERROR(@"GoTestpkgCallIError(Number, YES) succeeded; want error");
+  }
+  NSError *error2;
+  if (GoTestpkgCallIError(num, NO, &error2) == NO) {
+    ERROR(@"GoTestpkgCallIError(Number, NO) failed(%@); want success", error2);
+  }
+}
+
+void testIssue12403() {
+  Number *num = [[Number alloc] init];
+  num.value = 1024;
+
+  NSString *ret;
+  NSError *error;
+  if (GoTestpkgCallIStringError(num, @"alphabet", &ret, &error) == YES) {
+    ERROR(
+        @"GoTestpkgCallIStringError(Number, 'alphabet') succeeded; want error");
+  }
+  NSError *error2;
+  if (GoTestpkgCallIStringError(num, @"number", &ret, &error2) == NO) {
+    ERROR(
+        @"GoTestpkgCallIStringError(Number, 'number') failed(%@); want success",
+        error2);
+  } else if (![ret isEqualTo:@"OK"]) {
+    ERROR(@"GoTestpkgCallIStringError(Number, 'number') returned unexpected "
+          @"results %@",
+          ret);
+  }
+}
+
 // Invokes functions and object methods defined in Testpkg.h.
 //
 // TODO(hyangah): apply testing framework (e.g. XCTestCase)
@@ -196,6 +255,8 @@ int main(void) {
             @"to be collected.",
             numI);
     }
+
+    testIssue12307();
   }
 
   fprintf(stderr, "%s\n", err ? "FAIL" : "PASS");

@@ -6,6 +6,9 @@ package app_test
 
 import (
 	"fmt"
+	"image"
+	"image/color"
+	_ "image/png"
 	"io/ioutil"
 	"net"
 	"os"
@@ -15,6 +18,7 @@ import (
 	"time"
 
 	"golang.org/x/mobile/app/internal/apptest"
+	"golang.org/x/mobile/event/size"
 )
 
 // TestAndroidApp tests the lifecycle, event, and window semantics of a
@@ -67,6 +71,19 @@ func TestAndroidApp(t *testing.T) {
 	run(t, "adb", "shell", "input", "keyevent", KeycodePower)
 	run(t, "adb", "shell", "input", "keyevent", KeycodeUnlock)
 
+	const (
+		rotationPortrait  = "0"
+		rotationLandscape = "1"
+	)
+
+	rotate := func(rotation string) {
+		run(t, "adb", "shell", "content", "insert", "--uri", "content://settings/system", "--bind", "name:s:user_rotation", "--bind", "value:i:"+rotation)
+	}
+
+	// turn off automatic rotation and start in portrait
+	run(t, "adb", "shell", "content", "insert", "--uri", "content://settings/system", "--bind", "name:s:accelerometer_rotation", "--bind", "value:i:0")
+	rotate(rotationPortrait)
+
 	// start testapp
 	run(t,
 		"adb", "shell", "am", "start", "-n",
@@ -95,16 +112,28 @@ func TestAndroidApp(t *testing.T) {
 		Printf: t.Logf,
 	}
 
-	var PixelsPerPt float32
+	var pixelsPerPt float32
+	var orientation size.Orientation
 
 	comm.Recv("hello_from_testapp")
 	comm.Send("hello_from_host")
 	comm.Recv("lifecycle_visible")
-	comm.Recv("config", &PixelsPerPt)
-	if PixelsPerPt < 0.1 {
-		t.Fatalf("bad PixelsPerPt: %f", PixelsPerPt)
+	comm.Recv("size", &pixelsPerPt, &orientation)
+	if pixelsPerPt < 0.1 {
+		t.Fatalf("bad pixelsPerPt: %f", pixelsPerPt)
 	}
-	comm.Recv("paint")
+
+	// A single paint event is sent when the lifecycle enters
+	// StageVisible, and after the end of a touch event.
+	var color string
+	comm.Recv("paint", &color)
+	// Ignore the first paint color, it may be slow making it to the screen.
+
+	rotate(rotationLandscape)
+	comm.Recv("size", &pixelsPerPt, &orientation)
+	if want := size.OrientationLandscape; orientation != want {
+		t.Errorf("want orientation %d, got %d", want, orientation)
+	}
 
 	var x, y int
 	var ty string
@@ -119,9 +148,63 @@ func TestAndroidApp(t *testing.T) {
 		t.Errorf("want touch end(50, 60), got %s(%d,%d)", ty, x, y)
 	}
 
-	// TODO: screenshot of gl.Clear to test painting
+	comm.Recv("paint", &color)
+	if gotColor := currentColor(t); color != gotColor {
+		t.Errorf("app reports color %q, but saw %q", color, gotColor)
+	}
+
+	rotate(rotationPortrait)
+	comm.Recv("size", &pixelsPerPt, &orientation)
+	if want := size.OrientationPortrait; orientation != want {
+		t.Errorf("want orientation %d, got %d", want, orientation)
+	}
+
+	tap(t, 50, 60)
+	comm.Recv("touch", &ty, &x, &y) // touch begin
+	comm.Recv("touch", &ty, &x, &y) // touch end
+	comm.Recv("paint", &color)
+	if gotColor := currentColor(t); color != gotColor {
+		t.Errorf("app reports color %q, but saw %q", color, gotColor)
+	}
+
 	// TODO: lifecycle testing (NOTE: adb shell input keyevent 4 is the back button)
-	// TODO: orientation testing
+}
+
+func currentColor(t *testing.T) string {
+	file := fmt.Sprintf("app-screen-%d.png", time.Now().Unix())
+
+	run(t, "adb", "shell", "screencap", "-p", "/data/local/tmp/"+file)
+	run(t, "adb", "pull", "/data/local/tmp/"+file)
+	run(t, "adb", "shell", "rm", "/data/local/tmp/"+file)
+	defer os.Remove(file)
+
+	f, err := os.Open(file)
+	if err != nil {
+		t.Errorf("currentColor: cannot open screencap: %v", err)
+		return ""
+	}
+	m, _, err := image.Decode(f)
+	if err != nil {
+		t.Errorf("currentColor: cannot decode screencap: %v", err)
+		return ""
+	}
+	var center color.Color
+	{
+		b := m.Bounds()
+		x, y := b.Min.X+(b.Max.X-b.Min.X)/2, b.Min.Y+(b.Max.Y-b.Min.Y)/2
+		center = m.At(x, y)
+	}
+	r, g, b, _ := center.RGBA()
+	switch {
+	case r == 0xffff && g == 0x0000 && b == 0x0000:
+		return "red"
+	case r == 0x0000 && g == 0xffff && b == 0x0000:
+		return "green"
+	case r == 0x0000 && g == 0x0000 && b == 0xffff:
+		return "blue"
+	default:
+		return fmt.Sprintf("indeterminate: %v", center)
+	}
 }
 
 func tap(t *testing.T, x, y int) {

@@ -13,6 +13,7 @@ package app
 #include <sys/utsname.h>
 #include <stdint.h>
 #include <pthread.h>
+#include <UIKit/UIDevice.h>
 
 extern struct utsname sysInfo;
 
@@ -28,9 +29,9 @@ import (
 	"sync"
 	"unsafe"
 
-	"golang.org/x/mobile/event/config"
 	"golang.org/x/mobile/event/lifecycle"
 	"golang.org/x/mobile/event/paint"
+	"golang.org/x/mobile/event/size"
 	"golang.org/x/mobile/event/touch"
 	"golang.org/x/mobile/geom"
 	"golang.org/x/mobile/gl"
@@ -63,6 +64,7 @@ func main(f func(App)) {
 	panic("unexpected return from app.runApp")
 }
 
+var pixelsPerPt float32
 var screenScale int // [UIScreen mainScreen].scale, either 1, 2, or 3.
 
 //export setScreen
@@ -97,15 +99,23 @@ func setScreen(scale int) {
 }
 
 //export updateConfig
-func updateConfig(width, height int) {
-	widthPx := screenScale * width
-	heightPx := screenScale * height
-	eventsIn <- config.Event{
+func updateConfig(width, height, orientation int32) {
+	o := size.OrientationUnknown
+	switch orientation {
+	case C.UIDeviceOrientationPortrait, C.UIDeviceOrientationPortraitUpsideDown:
+		o = size.OrientationPortrait
+	case C.UIDeviceOrientationLandscapeLeft, C.UIDeviceOrientationLandscapeRight:
+		o = size.OrientationLandscape
+	}
+	widthPx := screenScale * int(width)
+	heightPx := screenScale * int(height)
+	eventsIn <- size.Event{
 		WidthPx:     widthPx,
 		HeightPx:    heightPx,
 		WidthPt:     geom.Pt(float32(widthPx) / pixelsPerPt),
 		HeightPt:    geom.Pt(float32(heightPx) / pixelsPerPt),
 		PixelsPerPt: pixelsPerPt,
+		Orientation: o,
 	}
 }
 

@@ -2,57 +2,57 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build android
+
 #include <stdlib.h>
 #include <jni.h>
 
 #include <android/sensor.h>
 
-#include "sensors_android.h"
+#define GO_ANDROID_SENSOR_LOOPER_ID 100
 
-void android_createManager(int looperId, android_SensorManager* dst) {
+ASensorEventQueue* queue = NULL;
+ALooper* looper = NULL;
+
+void GoAndroid_createManager() {
   ASensorManager* manager = ASensorManager_getInstance();
-
-  ALooper* looper = ALooper_forThread();
+  looper = ALooper_forThread();
   if (looper == NULL) {
     looper = ALooper_prepare(ALOOPER_PREPARE_ALLOW_NON_CALLBACKS);
   }
-  ASensorEventQueue* queue = ASensorManager_createEventQueue(manager, looper, looperId, NULL, NULL);
-  dst->looper = looper;
-  dst->queue = queue;
-  dst->looperId = looperId;
+  queue = ASensorManager_createEventQueue(manager, looper, GO_ANDROID_SENSOR_LOOPER_ID, NULL, NULL);
 }
 
-int android_enableSensor(ASensorEventQueue* q, int s, int32_t usec) {
+int GoAndroid_enableSensor(int s, int32_t usec) {
   ASensorManager* manager = ASensorManager_getInstance();
   const ASensor* sensor = ASensorManager_getDefaultSensor(manager, s);
   if (sensor == NULL) {
     return 1;
   }
-  ASensorEventQueue_enableSensor(q, sensor);
-  ASensorEventQueue_setEventRate(q, sensor, usec);
+  ASensorEventQueue_enableSensor(queue, sensor);
+  ASensorEventQueue_setEventRate(queue, sensor, usec);
   return 0;
 }
 
-void android_disableSensor(ASensorEventQueue* q, int s) {
+void GoAndroid_disableSensor(int s) {
   ASensorManager* manager = ASensorManager_getInstance();
   const ASensor* sensor = ASensorManager_getDefaultSensor(manager, s);
-  ASensorEventQueue_disableSensor(q, sensor);
+  ASensorEventQueue_disableSensor(queue, sensor);
 }
 
-int android_readQueue(int looperId, ASensorEventQueue* q, int n, int32_t* types, int64_t* timestamps, float* vectors) {
+int GoAndroid_readQueue(int n, int32_t* types, int64_t* timestamps, float* vectors) {
   int id;
   int events;
   ASensorEvent event;
   int i = 0;
-  // Block for 30 secs at most, timeout if nothing happens.
   // Try n times read from the event queue.
   // If anytime timeout occurs, don't retry to read and immediately return.
   // Consume the event queue entirely between polls.
-  while (i < n && (id = ALooper_pollAll(30*1000, NULL, &events, NULL)) >= 0) {
-    if (id != looperId) {
+  while (i < n && (id = ALooper_pollAll(-1, NULL, &events, NULL)) >= 0) {
+    if (id != GO_ANDROID_SENSOR_LOOPER_ID) {
       continue;
     }
-    while (i < n && ASensorEventQueue_getEvents(q, &event, 1)) {
+    while (i < n && ASensorEventQueue_getEvents(queue, &event, 1)) {
       types[i] = event.type;
       timestamps[i] = event.timestamp;
       vectors[i*3] = event.vector.x;
@@ -64,8 +64,8 @@ int android_readQueue(int looperId, ASensorEventQueue* q, int n, int32_t* types,
   return i;
 }
 
-void android_destroyManager(android_SensorManager* m) {
+void GoAndroid_destroyManager() {
   ASensorManager* manager = ASensorManager_getInstance();
-  ASensorManager_destroyEventQueue(manager, m->queue);
-  ALooper_release(m->looper);
+  ASensorManager_destroyEventQueue(manager, queue);
+  ALooper_release(looper);
 }

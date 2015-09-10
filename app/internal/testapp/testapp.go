@@ -13,10 +13,11 @@ import (
 
 	"golang.org/x/mobile/app"
 	"golang.org/x/mobile/app/internal/apptest"
-	"golang.org/x/mobile/event/config"
 	"golang.org/x/mobile/event/lifecycle"
 	"golang.org/x/mobile/event/paint"
+	"golang.org/x/mobile/event/size"
 	"golang.org/x/mobile/event/touch"
+	"golang.org/x/mobile/gl"
 )
 
 func main() {
@@ -39,8 +40,8 @@ func main() {
 		comm.Send("hello_from_testapp")
 		comm.Recv("hello_from_host")
 
+		color := "red"
 		sendPainting := false
-		var c config.Event
 		for e := range a.Events() {
 			switch e := app.Filter(e).(type) {
 			case lifecycle.Event:
@@ -51,17 +52,30 @@ func main() {
 				case lifecycle.CrossOff:
 					comm.Send("lifecycle_not_visible")
 				}
-			case config.Event:
-				c = e
-				comm.Send("config", c.PixelsPerPt)
+			case size.Event:
+				comm.Send("size", e.PixelsPerPt, e.Orientation)
 			case paint.Event:
+				if color == "red" {
+					gl.ClearColor(1, 0, 0, 1)
+				} else {
+					gl.ClearColor(0, 1, 0, 1)
+				}
+				gl.Clear(gl.COLOR_BUFFER_BIT)
+				a.EndPaint(e)
 				if sendPainting {
-					comm.Send("paint")
+					comm.Send("paint", color)
 					sendPainting = false
 				}
-				a.EndPaint(e)
 			case touch.Event:
 				comm.Send("touch", e.Type, e.X, e.Y)
+				if e.Type == touch.TypeEnd {
+					if color == "red" {
+						color = "green"
+					} else {
+						color = "red"
+					}
+					sendPainting = true
+				}
 			}
 		}
 	})

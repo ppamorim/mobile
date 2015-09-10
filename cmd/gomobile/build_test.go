@@ -12,6 +12,30 @@ import (
 	"text/template"
 )
 
+func TestRFC1034Label(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{"a", "a"},
+		{"123", "-23"},
+		{"a.b.c", "a-b-c"},
+		{"a-b", "a-b"},
+		{"a:b", "a-b"},
+		{"a?b", "a-b"},
+		{"αβγ", "---"},
+		{"💩", "--"},
+		{"My App", "My-App"},
+		{"...", ""},
+		{".-.", "--"},
+	}
+
+	for _, tc := range tests {
+		if got := rfc1034Label(tc.in); got != tc.want {
+			t.Errorf("rfc1034Label(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestAndroidBuild(t *testing.T) {
 	buf := new(bytes.Buffer)
 	defer func() {
@@ -24,7 +48,7 @@ func TestAndroidBuild(t *testing.T) {
 	buildX = true
 	buildO = "basic.apk"
 	buildTarget = "android"
-	gopath = filepath.SplitList(os.Getenv("GOPATH"))[0]
+	gopath = filepath.ToSlash(filepath.SplitList(os.Getenv("GOPATH"))[0])
 	if goos == "windows" {
 		os.Setenv("HOMEDRIVE", "C:")
 	}

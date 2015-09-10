@@ -16,12 +16,34 @@ import (
 
 type I interface {
 	Times(v int32) int64
+	Error(triggerError bool) error
+
+	StringError(s string) (string, error)
 }
 
 type myI struct{}
 
 func (i *myI) Times(v int32) int64 {
 	return int64(v) * 10
+}
+
+func (i *myI) Error(e bool) error {
+	if e {
+		return errors.New("some error")
+	}
+	return nil
+}
+
+func (i *myI) StringError(s string) (string, error) {
+	return s, nil
+}
+
+func CallIError(i I, triggerError bool) error {
+	return i.Error(triggerError)
+}
+
+func CallIStringError(i I, s string) (string, error) {
+	return i.StringError(s)
 }
 
 func NewI() I {
@@ -121,4 +143,13 @@ func (s *S) Sum() float64 {
 
 func CallSSum(s *S) float64 {
 	return s.Sum()
+}
+
+type Node struct {
+	V   string
+	Err error
+}
+
+func NewNode(name string) *Node {
+	return &Node{V: name}
 }

@@ -23,17 +23,24 @@ import (
 
 func goAndroidBuild(pkg *build.Package) (map[string]bool, error) {
 	libName := path.Base(pkg.ImportPath)
-	manifestData, err := ioutil.ReadFile(filepath.Join(pkg.Dir, "AndroidManifest.xml"))
+	manifestPath := filepath.Join(pkg.Dir, "AndroidManifest.xml")
+	manifestData, err := ioutil.ReadFile(manifestPath)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return nil, err
 		}
+
+		productName := rfc1034Label(libName)
+		if productName == "" {
+			productName = "ProductName" // like xcode.
+		}
+
 		buf := new(bytes.Buffer)
 		buf.WriteString(`<?xml version="1.0" encoding="utf-8"?>`)
 		err := manifestTmpl.Execute(buf, manifestTmplData{
 			// TODO(crawshaw): a better package path.
-			JavaPkgPath: "org.golang.todo." + libName,
-			Name:        libName,
+			JavaPkgPath: "org.golang.todo." + productName,
+			Name:        strings.Title(libName),
 			LibName:     libName,
 		})
 		if err != nil {
@@ -46,7 +53,7 @@ func goAndroidBuild(pkg *build.Package) (map[string]bool, error) {
 	} else {
 		libName, err = manifestLibName(manifestData)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("error parsing %s: %v", manifestPath, err)
 		}
 	}
 	libPath := filepath.Join(tmpdir, "lib"+libName+".so")

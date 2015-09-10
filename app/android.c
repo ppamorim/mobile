@@ -8,9 +8,6 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <jni.h>
-#include <pthread.h>
-#include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include "_cgo_export.h"
@@ -38,6 +35,8 @@ static jmethodID find_method(JNIEnv *env, jclass clazz, const char *name, const 
 	return m;
 }
 
+jmethodID key_rune_method;
+
 jint JNI_OnLoad(JavaVM* vm, void* reserved) {
 	JNIEnv* env;
 	if ((*vm)->GetEnv(vm, (void**)&env, JNI_VERSION_1_6) != JNI_OK) {
@@ -47,6 +46,7 @@ jint JNI_OnLoad(JavaVM* vm, void* reserved) {
 	// Load classes here, which uses the correct ClassLoader.
 	current_ctx_clazz = find_class(env, "org/golang/app/GoNativeActivity");
 	current_ctx_clazz = (jclass)(*env)->NewGlobalRef(env, current_ctx_clazz);
+	key_rune_method =  find_method(env, current_ctx_clazz, "getRune", "(III)I");
 
 	return JNI_VERSION_1_6;
 }
@@ -66,8 +66,8 @@ void ANativeActivity_onCreate(ANativeActivity *activity, void* savedState, size_
 		JNIEnv* env = activity->env;
 
 		// Note that activity->clazz is mis-named.
-		JavaVM* current_vm = activity->vm;
-		jobject current_ctx = activity->clazz;
+		current_vm = activity->vm;
+		current_ctx = activity->clazz;
 
 		setCurrentContext(current_vm, (*env)->NewGlobalRef(env, current_ctx));
 
@@ -110,4 +110,107 @@ void ANativeActivity_onCreate(ANativeActivity *activity, void* savedState, size_
 	activity->callbacks->onLowMemory = onLowMemory;
 
 	onCreate(activity);
+}
+
+// TODO(crawshaw): Test configuration on more devices.
+const EGLint RGB_888[] = {
+	EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+	EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+	EGL_BLUE_SIZE, 8,
+	EGL_GREEN_SIZE, 8,
+	EGL_RED_SIZE, 8,
+	EGL_DEPTH_SIZE, 16,
+	EGL_CONFIG_CAVEAT, EGL_NONE,
+	EGL_NONE
+};
+
+EGLDisplay display = NULL;
+EGLSurface surface = NULL;
+
+char* initEGLDisplay() {
+	display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+	if (!eglInitialize(display, 0, 0)) {
+		return "EGL initialize failed";
+	}
+	return NULL;
+}
+
+char* createEGLSurface(ANativeWindow* window) {
+	char* err;
+	EGLint numConfigs, format;
+	EGLConfig config;
+	EGLContext context;
+
+	if (display == 0) {
+		if ((err = initEGLDisplay()) != NULL) {
+			return err;
+		}
+	}
+
+	if (!eglChooseConfig(display, RGB_888, &config, 1, &numConfigs)) {
+		return "EGL choose RGB_888 config failed";
+	}
+	if (numConfigs <= 0) {
+		return "EGL no config found";
+	}
+
+	eglGetConfigAttrib(display, config, EGL_NATIVE_VISUAL_ID, &format);
+	if (ANativeWindow_setBuffersGeometry(window, 0, 0, format) != 0) {
+		return "EGL set buffers geometry failed";
+	}
+
+	surface = eglCreateWindowSurface(display, config, window, NULL);
+	if (surface == EGL_NO_SURFACE) {
+		return "EGL create surface failed";
+	}
+
+	const EGLint contextAttribs[] = { EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE };
+	context = eglCreateContext(display, config, EGL_NO_CONTEXT, contextAttribs);
+
+	if (eglMakeCurrent(display, surface, surface, context) == EGL_FALSE) {
+		return "eglMakeCurrent failed";
+	}
+	return NULL;
+}
+
+char* destroyEGLSurface() {
+	if (!eglDestroySurface(display, surface)) {
+		return "EGL destroy surface failed";
+	}
+	return NULL;
+}
+
+char* attachJNI(JNIEnv** envp) {
+	if (current_vm == NULL) {
+		return "current_vm not set";
+	}
+
+	switch ((*current_vm)->GetEnv(current_vm, (void**)envp, JNI_VERSION_1_6)) {
+	case JNI_OK:
+		return NULL;
+	case JNI_EDETACHED:
+		// AttachCurrentThread is typically paired with a call to
+		// DetachCurrentThread, however attachJNI is called for
+		// the duration of the main function, which exits when the
+		// process exits. We let Unix take care of thread cleanup.
+		if ((*current_vm)->AttachCurrentThread(current_vm, envp, 0) != 0) {
+			return "cannot attach JVM";
+		}
+		return NULL;
+	case JNI_EVERSION:
+		return "bad JNI version";
+	default:
+		return "unknown GetEnv error";
+	}
+}
+
+int32_t getKeyRune(JNIEnv* env, AInputEvent* e) {
+	return (int32_t)(*env)->CallIntMethod(
+		env,
+		current_ctx,
+		key_rune_method,
+		AInputEvent_getDeviceId(e),
+		AKeyEvent_getKeyCode(e),
+		AKeyEvent_getMetaState(e)
+	);
 }

@@ -10,6 +10,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -56,11 +58,11 @@ var cmdInit = &command{
 	Usage: "[-u]",
 	Short: "install android compiler toolchain",
 	Long: `
-Init downloads and installs the Android C++ compiler toolchain.
+Init installs the Android C++ compiler toolchain and builds copies
+of the Go standard library for mobile devices.
 
+When first run, it downloads part of the Android NDK.
 The toolchain is installed in $GOPATH/pkg/gomobile.
-If the Android C++ compiler toolchain already exists in the path,
-it skips download and uses the existing toolchain.
 
 The -u option forces download and installation of the new toolchain
 even when the toolchain exists.
@@ -126,6 +128,21 @@ func runInit(cmd *command) error {
 		return err
 	}
 
+	if runtime.GOOS == "darwin" {
+		// Install common x/mobile packages for local development.
+		// These are often slow to compile (due to cgo) and easy to forget.
+		//
+		// Limited to darwin for now as it is common for linux to
+		// not have GLES installed.
+		//
+		// TODO: consider testing GLES installation and suggesting it here
+		for _, pkg := range commonPkgs {
+			if err := installPkg(pkg, nil); err != nil {
+				return err
+			}
+		}
+	}
+
 	// Install standard libraries for cross compilers.
 	start := time.Now()
 	if err := installStd(androidArmEnv); err != nil {
@@ -150,6 +167,12 @@ func runInit(cmd *command) error {
 	return nil
 }
 
+var commonPkgs = []string{
+	"golang.org/x/mobile/gl",
+	"golang.org/x/mobile/app",
+	"golang.org/x/mobile/exp/app/debug",
+}
+
 func installDarwin() error {
 	if goos != "darwin" {
 		return nil // Only build iOS compilers on OS X.
@@ -168,15 +191,25 @@ func installDarwin() error {
 }
 
 func installStd(env []string, args ...string) error {
-	tOS := getenv(env, "GOOS")
-	tArch := getenv(env, "GOARCH")
-	if buildV {
-		fmt.Fprintf(os.Stderr, "\n# Building standard library for %s/%s.\n", tOS, tArch)
+	return installPkg("std", env, args...)
+}
+
+func installPkg(pkg string, env []string, args ...string) error {
+	tOS, tArch, pd := getenv(env, "GOOS"), getenv(env, "GOARCH"), pkgdir(env)
+	if tOS != "" && tArch != "" {
+		if buildV {
+			fmt.Fprintf(os.Stderr, "\n# Installing %s for %s/%s.\n", pkg, tOS, tArch)
+		}
+		args = append(args, "-pkgdir="+pd)
+	} else {
+		if buildV {
+			fmt.Fprintf(os.Stderr, "\n# Installing %s.\n", pkg)
+		}
 	}
 
 	// The -p flag is to speed up darwin/arm builds.
 	// Remove when golang.org/issue/10477 is resolved.
-	cmd := exec.Command("go", "install", fmt.Sprintf("-p=%d", runtime.NumCPU()), "-pkgdir="+pkgdir(env))
+	cmd := exec.Command("go", "install", fmt.Sprintf("-p=%d", runtime.NumCPU()))
 	cmd.Args = append(cmd.Args, args...)
 	if buildV {
 		cmd.Args = append(cmd.Args, "-v")
@@ -187,7 +220,7 @@ func installStd(env []string, args ...string) error {
 	if buildWork {
 		cmd.Args = append(cmd.Args, "-work")
 	}
-	cmd.Args = append(cmd.Args, "std")
+	cmd.Args = append(cmd.Args, pkg)
 	cmd.Env = append([]string{}, env...)
 	return runCmd(cmd)
 }
@@ -221,7 +254,7 @@ func move(dst, src string, names ...string) error {
 		}
 		if goos == "windows" {
 			// os.Rename fails if dstf already exists.
-			os.Remove(dstf)
+			removeAll(dstf)
 		}
 		if err := os.Rename(srcf, dstf); err != nil {
 			return err
@@ -288,6 +321,9 @@ func fetchOpenAL() error {
 	}
 	if err := extract("openal", archive); err != nil {
 		return err
+	}
+	if goos == "windows" {
+		resetReadOnlyFlagAll(filepath.Join(tmpdir, "openal"))
 	}
 	dst := filepath.Join(ndkccpath, "arm", "sysroot", "usr", "include")
 	src := filepath.Join(tmpdir, "openal", "include")
@@ -364,6 +400,9 @@ func fetchNDK() error {
 			return err
 		}
 	}
+	if goos == "windows" {
+		resetReadOnlyFlagAll(filepath.Join(tmpdir, "android-"+ndkVersion))
+	}
 
 	dst := filepath.Join(ndkccpath, "arm")
 	dstSysroot := filepath.Join(dst, "sysroot/usr")
@@ -433,6 +472,10 @@ func fetchFullNDK() error {
 	// is not used, and 7z.exe is not a normal dependency.
 	var inflate *exec.Cmd
 	if goos != "windows" {
+		// The downloaded archive is executed on linux and os x to unarchive.
+		// To do this execute permissions are needed.
+		os.Chmod(archive, 0755)
+
 		inflate = exec.Command(archive)
 	} else {
 		inflate = exec.Command("7z.exe", "x", archive)
@@ -481,6 +524,7 @@ func fetch(url string) (dst string, err error) {
 			os.Remove(f.Name())
 		}
 	}()
+	hashw := sha256.New()
 
 	resp, err := http.Get(url)
 	if err != nil {
@@ -489,7 +533,7 @@ func fetch(url string) (dst string, err error) {
 	if resp.StatusCode != http.StatusOK {
 		err = fmt.Errorf("error fetching %v, status: %v", url, resp.Status)
 	} else {
-		_, err = io.Copy(f, resp.Body)
+		_, err = io.Copy(io.MultiWriter(hashw, f), resp.Body)
 	}
 	if err2 := resp.Body.Close(); err == nil {
 		err = err2
@@ -499,6 +543,10 @@ func fetch(url string) (dst string, err error) {
 	}
 	if err = f.Close(); err != nil {
 		return "", err
+	}
+	hash := hex.EncodeToString(hashw.Sum(nil))
+	if fetchHashes[name] != hash {
+		return "", fmt.Errorf("sha256 for %q: %v, want %v", name, hash, fetchHashes[name])
 	}
 	if err = os.Rename(f.Name(), dst); err != nil {
 		return "", err
